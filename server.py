@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_from_directory
 import os
 import tempfile
 import json
@@ -10,7 +10,7 @@ import jpype
 import atexit
 import threading
 
-app = Flask(__name__, static_folder='widget')
+app = Flask(__name__)
 jvm_lock = threading.Lock()
 
 def init_jvm():
@@ -27,7 +27,11 @@ def cleanup_jvm():
 
 @app.route('/')
 def index():
-    return app.send_static_file('index.html')
+    return send_from_directory('widget', 'index.html')
+
+@app.route('/widget/<path:filename>')
+def serve_static(filename):
+    return send_from_directory('widget', filename)
 
 @app.route('/analyze', methods=['POST'])
 def analyze():
@@ -71,7 +75,14 @@ def analyze():
                     'postgresql': EDbVendor.dbvpostgresql,
                     'sqlserver': EDbVendor.dbvmssql,
                     'hive': EDbVendor.dbvhive,
-                    'snowflake': EDbVendor.dbvsnowflake
+                    'snowflake': EDbVendor.dbvsnowflake,
+                    'db2': EDbVendor.dbvdb2,
+                    'greenplum': EDbVendor.dbvgreenplum,
+                    'informix': EDbVendor.dbvinformix,
+                    'netezza': EDbVendor.dbvnetezza,
+                    'redshift': EDbVendor.dbvredshift,
+                    'sybase': EDbVendor.dbvsybase,
+                    'teradata': EDbVendor.dbvteradata
                 }
                 vendor = db_vendor_map.get(db_type.lower(), EDbVendor.dbvoracle)
                 
@@ -140,4 +151,4 @@ if __name__ == '__main__':
     atexit.register(cleanup_jvm)
     
     # 启动Flask应用
-    app.run(port=8000, debug=False)
+    app.run(host='0.0.0.0', port=8000)

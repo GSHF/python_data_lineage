@@ -3,7 +3,7 @@
     <head>
         <meta charset="UTF-8" />
         <title>Data lineage view</title>
-        <script src="sqlflow.widget.3.5.19.js?t=1704526657668"></script>
+        <script src="/widget/sqlflow.widget.3.5.19.js?t=1704526657668"></script>
         <script>
             let sqlflow;
             let editor;
@@ -295,6 +295,13 @@
                         <option value="sqlserver">SQL Server</option>
                         <option value="hive">Hive</option>
                         <option value="snowflake">Snowflake</option>
+                        <option value="db2">DB2</option>
+                        <option value="greenplum">Greenplum</option>
+                        <option value="informix">Informix</option>
+                        <option value="netezza">Netezza</option>
+                        <option value="redshift">Redshift</option>
+                        <option value="sybase">Sybase</option>
+                        <option value="teradata">Teradata</option>
                     </select>
                     <button id="analyzeBtn" onclick="analyzeSql('lineage')">Analyze Lineage</button>
                     <button id="erBtn" onclick="analyzeSql('er')">Generate ER</button>
