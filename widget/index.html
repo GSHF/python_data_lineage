@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en-us">
+    <head>
+        <meta charset="UTF-8" />
+        <title>Data lineage view</title>
+        <script src="sqlflow.widget.3.5.19.js?t=1704526657668"></script>
+        <script>
+            let sqlflow;
+            let editor;
+            let currentSql = '';
+            
+            async function analyzeSql(type = 'lineage') {
+                const dbType = document.getElementById('dbType').value;
+                const sqlText = document.getElementById('sqlInput').value;
+                currentSql = sqlText;
+                const errorDiv = document.getElementById('error');
+                const analyzeBtn = document.getElementById('analyzeBtn');
+                const erBtn = document.getElementById('erBtn');
+                
+                errorDiv.style.display = 'none';
+                analyzeBtn.disabled = true;
+                erBtn.disabled = true;
+                
+                try {
+                    const response = await fetch('/analyze', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            dbType: dbType,
+                            sql: sqlText,
+                            type: type
+                        })
+                    });
+                    
+                    const data = await response.json();
+                    
+                    if (!response.ok) {
+                        throw new Error(data.error || 'Analysis failed');
+                    }
+                    
+                    const options = {
+                        layout: true,
+                        onNodeClick: handleNodeClick,
+                        onEdgeClick: handleEdgeClick
+                    };
+                    
+                    sqlflow.visualizeJSON(data, options);
+                    highlightSqlForNode(null);
+                    
+                } catch (error) {
+                    errorDiv.textContent = error.message;
+                    errorDiv.style.display = 'block';
+                } finally {
+                    analyzeBtn.disabled = false;
+                    erBtn.disabled = false;
+                }
+            }
+            
+            function handleNodeClick(node) {
+                if (node && (node.name || node.text)) {
+                    const columnName = node.name || node.text;
+                    const table = node.table || node.parent;
+                    highlightSqlForNode(columnName, table);
+                } else {
+                    highlightSqlForNode(null);
+                }
+            }
+            
+            function handleEdgeClick(edge) {
+                if (edge && edge.text) {
+                    highlightSqlForNode(edge.text);
+                } else {
+                    highlightSqlForNode(null);
+                }
+            }
+            
+            function highlightSqlForNode(columnName, table) {
+                const sqlInput = document.getElementById('sqlInput');
+                const sqlHighlightDiv = document.getElementById('sqlHighlight');
+                let sql = currentSql;
+                
+                if (!columnName) {
+                    sqlHighlightDiv.style.display = 'none';
+                    sqlInput.style.display = 'block';
+                    return;
+                }
+                
+                // 转义正则表达式特殊字符
+                columnName = columnName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                
+                // 创建一个临时div来转义HTML
+                const tempDiv = document.createElement('div');
+                tempDiv.textContent = sql;
+                let escapedSql = tempDiv.innerHTML;
+                
+                // 构建匹配模式
+                let pattern;
+                if (table) {
+                    // 如果有表名，匹配 表名.列名 或者 别名.列名 的模式
+                    pattern = new RegExp(`(${table}\\.|[a-zA-Z0-9_]+\\.)?${columnName}\\b`, 'g');
+                } else {
+                    // 否则只匹配列名
+                    pattern = new RegExp(`\\b${columnName}\\b`, 'g');
+                }
+                
+                // 高亮匹配的文本
+                escapedSql = escapedSql.replace(pattern, match => {
+                    return `<span class="highlight">${match}</span>`;
+                });
+                
+                // 添加行号和保持缩进
+                const lines = escapedSql.split('\n');
+                const highlightedLines = lines.map((line, i) => {
+                    const lineNumber = i + 1;
+                    const paddedNumber = String(lineNumber).padStart(3, ' ');
+                    return `<span class="line-number">${paddedNumber}</span>${line}`;
+                });
+                
+                // 更新显示
+                sqlHighlightDiv.innerHTML = highlightedLines.join('\n');
+                sqlHighlightDiv.style.display = 'block';
+                sqlInput.style.display = 'none';
+                
+                // 找到第一个高亮的位置并滚动到那里
+                const firstHighlight = sqlHighlightDiv.querySelector('.highlight');
+                if (firstHighlight) {
+                    firstHighlight.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }
+            }
+
+            document.addEventListener('DOMContentLoaded', async () => {
+                sqlflow = await SQLFlow.init({
+                    container: document.getElementById('sqlflow'),
+                    width: '100%',
+                    height: '100%',
+                    apiPrefix: '',
+                    component: {
+                        sqlEditor: false,
+                        graphLocate: true,
+                        minimap: true,
+                    },
+                });
+            });
+        </script>
+        <style>
+            html, body {
+                width: 100%;
+                height: 100%;
+                margin: 0;
+                padding: 0;
+                box-sizing: border-box;
+                font-family: Arial, sans-serif;
+                overflow: hidden;
+            }
+            
+            .container {
+                display: flex;
+                height: 100vh;
+                width: 100%;
+            }
+            
+            .left-panel {
+                width: 40%;
+                height: 100%;
+                display: flex;
+                flex-direction: column;
+                border-right: 1px solid #ccc;
+                background-color: #f8f9fa;
+            }
+            
+            .right-panel {
+                width: 60%;
+                height: 100%;
+                display: flex;
+                flex-direction: column;
+            }
+            
+            .controls {
+                padding: 10px;
+                background-color: #fff;
+                border-bottom: 1px solid #ccc;
+            }
+            
+            .sql-container {
+                flex: 1;
+                padding: 10px;
+                display: flex;
+                flex-direction: column;
+                overflow: hidden;
+                position: relative;
+            }
+            
+            #sqlInput, #sqlHighlight {
+                width: 100%;
+                height: 100%;
+                margin: 0;
+                font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', 'Consolas', monospace;
+                font-size: 14px;
+                line-height: 1.5;
+                padding: 10px 10px 10px 50px; /* 为行号留出空间 */
+                box-sizing: border-box;
+                border: 1px solid #ccc;
+                border-radius: 4px;
+                resize: none;
+                white-space: pre;
+                tab-size: 4;
+                -moz-tab-size: 4;
+                background-color: #fff;
+                overflow: auto;
+            }
+            
+            #sqlHighlight {
+                display: none;
+                position: absolute;
+                top: 10px;
+                left: 10px;
+                right: 10px;
+                bottom: 10px;
+                background-color: #fafafa;
+            }
+            
+            #sqlHighlight .highlight {
+                background-color: #ffeb3b;
+                padding: 2px;
+                border-radius: 2px;
+                display: inline-block;
+            }
+            
+            .line-number {
+                display: inline-block;
+                width: 40px;
+                margin-left: -40px;
+                color: #999;
+                text-align: right;
+                padding-right: 10px;
+                user-select: none;
+            }
+            
+            select, button {
+                padding: 8px 16px;
+                margin-right: 10px;
+                border: 1px solid #ccc;
+                border-radius: 4px;
+                font-size: 14px;
+            }
+            
+            button {
+                background-color: #4CAF50;
+                color: white;
+                border: none;
+                cursor: pointer;
+            }
+            
+            button:hover {
+                background-color: #45a049;
+            }
+            
+            button:disabled {
+                background-color: #cccccc;
+                cursor: not-allowed;
+            }
+            
+            #error {
+                color: red;
+                margin: 10px 0;
+                padding: 10px;
+                border: 1px solid red;
+                border-radius: 4px;
+                display: none;
+            }
+            
+            #sqlflow {
+                flex: 1;
+                border: none;
+                background-color: #fff;
+            }
+            
+            .graph-container {
+                flex: 1;
+                position: relative;
+                overflow: hidden;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="left-panel">
+                <div class="controls">
+                    <select id="dbType">
+                        <option value="oracle">Oracle</option>
+                        <option value="mysql">MySQL</option>
+                        <option value="postgresql">PostgreSQL</option>
+                        <option value="sqlserver">SQL Server</option>
+                        <option value="hive">Hive</option>
+                        <option value="snowflake">Snowflake</option>
+                    </select>
+                    <button id="analyzeBtn" onclick="analyzeSql('lineage')">Analyze Lineage</button>
+                    <button id="erBtn" onclick="analyzeSql('er')">Generate ER</button>
+                </div>
+                <div class="sql-container">
+                    <textarea id="sqlInput" placeholder="Enter your SQL here..."></textarea>
+                    <div id="sqlHighlight"></div>
+                    <div id="error"></div>
+                </div>
+            </div>
+            <div class="right-panel">
+                <div class="graph-container">
+                    <div id="sqlflow"></div>
+                </div>
+            </div>
+        </div>
+    </body>
+</html>
