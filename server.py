@@ -3,6 +3,7 @@ import os
 import tempfile
 import json
 import sys
+import re
 import traceback
 from io import StringIO
 import contextlib
@@ -44,6 +45,129 @@ def analyze():
         
         if not sql:
             return jsonify({'error': 'SQL is required'}), 400
+            
+        # 进行SQL语法检查
+        with jvm_lock:
+            if not jpype.isJVMStarted():
+                init_jvm()
+                
+            # 获取需要的Java类
+            EDbVendor = jpype.JClass("gudusoft.gsqlparser.EDbVendor")
+            TGSqlParser = jpype.JClass("gudusoft.gsqlparser.TGSqlParser")
+            
+            # 获取数据库类型
+            db_vendor_map = {
+                'oracle': EDbVendor.dbvoracle,
+                'mysql': EDbVendor.dbvmysql,
+                'postgresql': EDbVendor.dbvpostgresql,
+                'sqlserver': EDbVendor.dbvmssql,
+                'hive': EDbVendor.dbvhive,
+                'snowflake': EDbVendor.dbvsnowflake,
+                'db2': EDbVendor.dbvdb2,
+                'greenplum': EDbVendor.dbvgreenplum,
+                'informix': EDbVendor.dbvinformix,
+                'netezza': EDbVendor.dbvnetezza,
+                'redshift': EDbVendor.dbvredshift,
+                'sybase': EDbVendor.dbvsybase,
+                'teradata': EDbVendor.dbvteradata
+            }
+            vendor = db_vendor_map.get(db_type.lower(), EDbVendor.dbvoracle)
+            
+            # 创建SQL解析器
+            parser = TGSqlParser(vendor)
+            parser.sqltext = sql
+            
+            # 解析SQL
+            result = parser.parse()
+            if result != 0:
+                # 获取错误信息
+                error_message = str(parser.getErrormessage())
+                errors = []
+                
+                # 将错误信息按行分割
+                for line in error_message.splitlines():
+                    if line:
+                        error_info = {
+                            'message': '',
+                            'line': 1,
+                            'column': 1,
+                            'length': 1,
+                            'type': 'error'
+                        }
+                        
+                        # 解析不同类型的错误
+                        if 'tokenlize' in line:
+                            # 处理词法错误
+                            match = re.search(r'tokenlize\((\d+)\).*near:\s*([^(]+)\((\d+),(\d+)', line)
+                            if match:
+                                error_code, text, line_no, col_no = match.groups()
+                                error_info.update({
+                                    'message': f"发现非法符号 '{text.strip()}'",
+                                    'line': int(line_no),
+                                    'column': int(col_no),
+                                    'length': len(text.strip()),
+                                    'type': 'lexical'
+                                })
+                            else:
+                                error_info['message'] = f"词法错误: {line}"
+                        elif 'syntax error' in line:
+                            # 处理语法错误
+                            match = re.search(r'syntax error,\s*state:(\d+)\((\d+)\).*near:\s*([^(]+)\((\d+),(\d+)', line)
+                            if match:
+                                state, error_code, text, line_no, col_no = match.groups()
+                                # 根据错误状态码提供更详细的错误信息
+                                error_details = {
+                                    '941': '需要SELECT关键字',
+                                    '942': '需要FROM关键字',
+                                    '943': '表名不合法或缺失',
+                                    '944': '列名不合法或缺失',
+                                    '945': '需要WHERE关键字',
+                                    '946': '条件表达式不完整或语法错误',
+                                    '947': '需要GROUP BY关键字',
+                                    '948': '需要ORDER BY关键字',
+                                    '949': '需要HAVING关键字',
+                                    '950': '子查询语法错误',
+                                    '951': '关键字顺序错误',
+                                    '952': '缺少必要的括号',
+                                    '953': '括号不匹配',
+                                    '954': '运算符使用错误',
+                                    '955': '函数语法错误',
+                                    '956': '表达式语法错误',
+                                    '957': '列表语法错误',
+                                    '958': '值列表语法错误',
+                                    '959': 'JOIN语法错误',
+                                    '960': '条件语法错误'
+                                }.get(state, '语法错误')
+                                
+                                error_info.update({
+                                    'message': f"{error_details}, 错误发生在 '{text.strip()}' 附近",
+                                    'line': int(line_no),
+                                    'column': int(col_no),
+                                    'length': len(text.strip()),
+                                    'type': 'syntax',
+                                    'code': state
+                                })
+                            else:
+                                error_info['message'] = f"语法错误: {line}"
+                        elif 'no_root_node' in line:
+                            # 处理没有根节点的错误
+                            error_info['message'] = "SQL语句不完整或缺少必要的关键字"
+                        else:
+                            # 其他错误
+                            error_info['message'] = f"语法错误: {line}"
+                        
+                        errors.append(error_info)
+                
+                if not errors:
+                    errors.append({
+                        'message': error_message,
+                        'line': 1,
+                        'column': 1,
+                        'length': 1,
+                        'type': 'error'
+                    })
+                    
+                return jsonify({'errors': errors}), 400
             
         # 创建临时SQL文件
         with tempfile.NamedTemporaryFile(mode='w', suffix='.sql', delete=False, encoding='utf-8') as temp:
@@ -139,6 +263,89 @@ def analyze():
                 os.unlink(temp_path)
             except:
                 pass
+
+@app.route('/graph/table-lineage', methods=['POST'])
+def get_table_lineage():
+    try:
+        data = request.get_json()
+        table_name = data.get('table')
+        
+        with open(os.path.join('widget', 'json', 'lineageGraph.json'), 'r', encoding='utf-8') as f:
+            graph_data = json.load(f)
+        
+        # 筛选与指定表相关的节点和边
+        filtered_nodes = []
+        filtered_edges = []
+        
+        if 'nodes' in graph_data:
+            filtered_nodes = [node for node in graph_data['nodes'] 
+                            if node.get('table') == table_name or 
+                            (not node.get('name') and node.get('text') == table_name)]
+        
+        if filtered_nodes and 'edges' in graph_data:
+            node_ids = set(node.get('id') for node in filtered_nodes)
+            filtered_edges = [edge for edge in graph_data['edges']
+                            if edge.get('source') in node_ids or edge.get('target') in node_ids]
+        
+        return jsonify({
+            'nodes': filtered_nodes,
+            'edges': filtered_edges
+        })
+    
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/graph/column-lineage', methods=['POST'])
+def get_column_lineage():
+    try:
+        data = request.get_json()
+        table_name = data.get('table')
+        column_name = data.get('column')
+        
+        with open(os.path.join('widget', 'json', 'lineageGraph.json'), 'r', encoding='utf-8') as f:
+            graph_data = json.load(f)
+        
+        # 筛选与指定列相关的节点和边
+        filtered_nodes = []
+        filtered_edges = []
+        
+        if 'nodes' in graph_data:
+            filtered_nodes = [node for node in graph_data['nodes']
+                            if (node.get('table') == table_name and node.get('name') == column_name) or
+                            (node.get('name') == column_name)]
+        
+        if filtered_nodes and 'edges' in graph_data:
+            node_ids = set(node.get('id') for node in filtered_nodes)
+            filtered_edges = [edge for edge in graph_data['edges']
+                            if edge.get('source') in node_ids or edge.get('target') in node_ids]
+        
+        return jsonify({
+            'nodes': filtered_nodes,
+            'edges': filtered_edges
+        })
+    
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/graph/table-columns', methods=['POST'])
+def get_table_columns():
+    try:
+        data = request.get_json()
+        table_name = data.get('table')
+        
+        with open(os.path.join('widget', 'json', 'lineageGraph.json'), 'r', encoding='utf-8') as f:
+            graph_data = json.load(f)
+        
+        # 获取指定表的所有列
+        columns = []
+        if 'nodes' in graph_data:
+            columns = [node for node in graph_data['nodes']
+                      if node.get('table') == table_name and node.get('name')]
+        
+        return jsonify(columns)
+    
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
     # 确保json目录存在

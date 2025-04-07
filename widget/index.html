@@ -8,6 +8,7 @@
             let sqlflow;
             let editor;
             let currentSql = '';
+            let currentData = null;
             
             async function analyzeSql(type = 'lineage') {
                 const dbType = document.getElementById('dbType').value;
@@ -37,13 +38,42 @@
                     const data = await response.json();
                     
                     if (!response.ok) {
-                        throw new Error(data.error || 'Analysis failed');
+                        if (data.errors) {
+                            // 处理详细的错误信息
+                            const errorMessages = data.errors.map(err => {
+                                const location = err.line && err.column ? 
+                                    `<span class="error-location" data-line="${err.line}" data-column="${err.column}">[Line ${err.line}, Column ${err.column}]</span>` : '';
+                                return `${location} ${err.message}`;
+                            }).join('\n');
+                            
+                            errorDiv.innerHTML = errorMessages;
+                            errorDiv.style.display = 'block';
+                            
+                            // 添加错误位置点击事件
+                            const errorLocations = errorDiv.querySelectorAll('.error-location');
+                            errorLocations.forEach(location => {
+                                location.style.cursor = 'pointer';
+                                location.style.color = '#0366d6';
+                                location.style.textDecoration = 'underline';
+                                location.addEventListener('click', () => {
+                                    const line = parseInt(location.dataset.line);
+                                    const column = parseInt(location.dataset.column);
+                                    highlightError(line, column);
+                                });
+                            });
+                            return;
+                        } else {
+                            errorDiv.textContent = data.error || 'Analysis failed';
+                            errorDiv.style.display = 'block';
+                            return;
+                        }
                     }
                     
                     const options = {
                         layout: true,
                         onNodeClick: handleNodeClick,
-                        onEdgeClick: handleEdgeClick
+                        onEdgeClick: handleEdgeClick,
+                        onContextMenu: handleContextMenu
                     };
                     
                     sqlflow.visualizeJSON(data, options);
@@ -76,7 +106,348 @@
                 }
             }
             
-            function highlightSqlForNode(columnName, table) {
+            function handleContextMenu(event, element) {
+                event.preventDefault();
+                
+                // 移除已存在的菜单
+                const existingMenu = document.querySelector('.context-menu');
+                if (existingMenu) {
+                    document.body.removeChild(existingMenu);
+                }
+                
+                // 创建菜单容器
+                const menu = document.createElement('div');
+                menu.className = 'context-menu';
+                menu.style.left = `${event.pageX}px`;
+                menu.style.top = `${event.pageY}px`;
+                
+                // 定义菜单项
+                const menuItems = [];
+                
+                // 根据节点类型添加不同的菜单项
+                if (element) {
+                    if (element.table || (!element.name && element.text)) {
+                        // 表级别的菜单项
+                        menuItems.push(
+                            { text: 'Show table to the leftmost', action: () => showTableToLeft(element) },
+                            { text: 'Show table lineage', action: () => showTableLineage(element) },
+                            { text: 'List table columns', action: () => listTableColumns(element) }
+                        );
+                    }
+                    
+                    if (element.name) {
+                        // 列级别的菜单项
+                        menuItems.push(
+                            { text: 'Show column to the leftmost', action: () => showColumnToLeft(element) },
+                            { text: 'Show column lineage', action: () => showColumnLineage(element) }
+                        );
+                    }
+                }
+                
+                // 添加下载选项
+                menuItems.push(
+                    { text: 'Download as PNG', action: () => downloadAsPNG() },
+                    { text: 'Download as JSON', action: () => downloadAsJSON() },
+                    { text: 'Download as CSV', action: () => downloadAsCSV() }
+                );
+                
+                // 创建菜单项
+                menuItems.forEach(item => {
+                    const menuItem = document.createElement('div');
+                    menuItem.className = 'context-menu-item';
+                    menuItem.textContent = item.text;
+                    menuItem.onclick = () => {
+                        item.action();
+                        document.body.removeChild(menu);
+                    };
+                    menu.appendChild(menuItem);
+                });
+                
+                // 添加菜单到页面
+                document.body.appendChild(menu);
+                
+                // 点击其他地方时关闭菜单
+                const closeMenu = (e) => {
+                    if (!menu.contains(e.target)) {
+                        document.body.removeChild(menu);
+                        document.removeEventListener('click', closeMenu);
+                    }
+                };
+                
+                // 延迟添加事件监听器，避免立即触发
+                setTimeout(() => {
+                    document.addEventListener('click', closeMenu);
+                }, 0);
+            }
+            
+            // 菜单项功能实现
+            async function showTableToLeft(element) {
+                if (!element || (!element.table && !element.text)) return;
+                const tableName = element.table || element.text;
+                
+                try {
+                    const response = await fetch('/graph/table-lineage', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({ table: tableName })
+                    });
+                    
+                    const data = await response.json();
+                    if (data.error) {
+                        console.error('Error:', data.error);
+                        return;
+                    }
+                    
+                    // 更新图形显示
+                    sqlflow.visualizeJSON(data, {
+                        layout: true,
+                        onNodeClick: handleNodeClick,
+                        onEdgeClick: handleEdgeClick,
+                        onContextMenu: handleContextMenu
+                    });
+                } catch (error) {
+                    console.error('Error:', error);
+                }
+            }
+            
+            async function showColumnToLeft(element) {
+                if (!element || !element.name) return;
+                
+                try {
+                    const response = await fetch('/graph/column-lineage', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            table: element.table,
+                            column: element.name
+                        })
+                    });
+                    
+                    const data = await response.json();
+                    if (data.error) {
+                        console.error('Error:', data.error);
+                        return;
+                    }
+                    
+                    // 更新图形显示
+                    sqlflow.visualizeJSON(data, {
+                        layout: true,
+                        onNodeClick: handleNodeClick,
+                        onEdgeClick: handleEdgeClick,
+                        onContextMenu: handleContextMenu
+                    });
+                } catch (error) {
+                    console.error('Error:', error);
+                }
+            }
+            
+            async function showTableLineage(element) {
+                if (!element || (!element.table && !element.text)) return;
+                const tableName = element.table || element.text;
+                
+                try {
+                    const response = await fetch('/graph/table-lineage', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({ table: tableName })
+                    });
+                    
+                    const data = await response.json();
+                    if (data.error) {
+                        console.error('Error:', data.error);
+                        return;
+                    }
+                    
+                    // 更新图形显示
+                    sqlflow.visualizeJSON(data, {
+                        layout: true,
+                        onNodeClick: handleNodeClick,
+                        onEdgeClick: handleEdgeClick,
+                        onContextMenu: handleContextMenu
+                    });
+                } catch (error) {
+                    console.error('Error:', error);
+                }
+            }
+            
+            async function showColumnLineage(element) {
+                if (!element || !element.name) return;
+                
+                try {
+                    const response = await fetch('/graph/column-lineage', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            table: element.table,
+                            column: element.name
+                        })
+                    });
+                    
+                    const data = await response.json();
+                    if (data.error) {
+                        console.error('Error:', data.error);
+                        return;
+                    }
+                    
+                    // 更新图形显示
+                    sqlflow.visualizeJSON(data, {
+                        layout: true,
+                        onNodeClick: handleNodeClick,
+                        onEdgeClick: handleEdgeClick,
+                        onContextMenu: handleContextMenu
+                    });
+                } catch (error) {
+                    console.error('Error:', error);
+                }
+            }
+            
+            async function listTableColumns(element) {
+                if (!element || (!element.table && !element.text)) return;
+                const tableName = element.table || element.text;
+                
+                try {
+                    const response = await fetch('/graph/table-columns', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({ table: tableName })
+                    });
+                    
+                    const columns = await response.json();
+                    if (columns.error) {
+                        console.error('Error:', columns.error);
+                        return;
+                    }
+                    
+                    // 创建列信息弹窗
+                    const dialog = document.createElement('div');
+                    dialog.className = 'column-dialog';
+                    
+                    const title = document.createElement('h3');
+                    title.textContent = `Columns in table ${tableName}`;
+                    dialog.appendChild(title);
+                    
+                    const columnList = document.createElement('ul');
+                    columns.forEach(column => {
+                        const item = document.createElement('li');
+                        item.textContent = `${column.name}${column.dataType ? ` (${column.dataType})` : ''}`;
+                        columnList.appendChild(item);
+                    });
+                    dialog.appendChild(columnList);
+                    
+                    const closeButton = document.createElement('button');
+                    closeButton.textContent = 'Close';
+                    closeButton.onclick = () => document.body.removeChild(dialog);
+                    dialog.appendChild(closeButton);
+                    
+                    document.body.appendChild(dialog);
+                } catch (error) {
+                    console.error('Error:', error);
+                }
+            }
+            
+            function highlightBackwards(element) {
+                if (element && (element.name || element.text)) {
+                    const columnName = element.name || element.text;
+                    const table = element.table || element.parent;
+                    highlightSqlForNode(columnName, table, true);
+                }
+            }
+            
+            function highlightForwards(element) {
+                if (element && (element.name || element.text)) {
+                    const columnName = element.name || element.text;
+                    const table = element.table || element.parent;
+                    highlightSqlForNode(columnName, table, false);
+                }
+            }
+            
+            // 下载功能实现
+            function downloadAsPNG() {
+                const svg = document.querySelector('svg');
+                if (!svg) {
+                    console.error('No SVG element found');
+                    return;
+                }
+                
+                const canvas = document.createElement('canvas');
+                const box = svg.getBoundingClientRect();
+                canvas.width = box.width;
+                canvas.height = box.height;
+                
+                const ctx = canvas.getContext('2d');
+                const data = (new XMLSerializer()).serializeToString(svg);
+                const DOMURL = window.URL || window.webkitURL || window;
+                
+                const img = new Image();
+                const svgBlob = new Blob([data], {type: 'image/svg+xml;charset=utf-8'});
+                const url = DOMURL.createObjectURL(svgBlob);
+                
+                img.onload = function () {
+                    ctx.drawImage(img, 0, 0);
+                    DOMURL.revokeObjectURL(url);
+                    
+                    const imgURL = canvas.toDataURL('image/png');
+                    const a = document.createElement('a');
+                    a.href = imgURL;
+                    a.download = 'lineage-graph.png';
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                };
+                
+                img.src = url;
+            }
+            
+            function downloadAsJSON() {
+                const graphData = sqlflow.getGraphData();
+                const dataStr = JSON.stringify(graphData, null, 2);
+                const blob = new Blob([dataStr], {type: 'application/json'});
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'lineage-graph.json';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            }
+            
+            function downloadAsCSV() {
+                const graphData = sqlflow.getGraphData();
+                let csv = 'Source,Target,Type\n';
+                
+                if (graphData && graphData.edges) {
+                    graphData.edges.forEach(edge => {
+                        const source = graphData.nodes.find(n => n.id === edge.source);
+                        const target = graphData.nodes.find(n => n.id === edge.target);
+                        if (source && target) {
+                            csv += `${source.text || source.name},${target.text || target.name},${edge.type || 'default'}\n`;
+                        }
+                    });
+                }
+                
+                const blob = new Blob([csv], {type: 'text/csv'});
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'lineage-graph.csv';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            }
+            
+            function highlightSqlForNode(columnName, table, backwards = false) {
                 const sqlInput = document.getElementById('sqlInput');
                 const sqlHighlightDiv = document.getElementById('sqlHighlight');
                 let sql = currentSql;
@@ -124,13 +495,104 @@
                 sqlInput.style.display = 'none';
                 
                 // 找到第一个高亮的位置并滚动到那里
-                const firstHighlight = sqlHighlightDiv.querySelector('.highlight');
-                if (firstHighlight) {
-                    firstHighlight.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                const highlights = sqlHighlightDiv.querySelectorAll('.highlight');
+                if (highlights.length > 0) {
+                    const targetHighlight = backwards ? highlights[0] : highlights[highlights.length - 1];
+                    targetHighlight.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }
+            }
+
+            function updateLineNumbers() {
+                const sqlInput = document.getElementById('sqlInput');
+                const lineNumbers = document.querySelector('.line-numbers');
+                const lines = sqlInput.value.split('\n');
+                
+                lineNumbers.innerHTML = '';
+                lineNumbers.style.paddingTop = '10px';
+                
+                lines.forEach((_, i) => {
+                    const div = document.createElement('div');
+                    div.className = 'line-number';
+                    div.textContent = i + 1;
+                    lineNumbers.appendChild(div);
+                });
+            }
+
+            function highlightError(line, column) {
+                const sqlInput = document.getElementById('sqlInput');
+                const lines = sqlInput.value.split('\n');
+                
+                // 清除现有的高亮
+                const existingHighlights = document.querySelectorAll('.error-highlight');
+                existingHighlights.forEach(el => el.remove());
+                
+                if (line > 0 && line <= lines.length) {
+                    const lineText = lines[line - 1];
+                    const fontSize = parseFloat(getComputedStyle(sqlInput).fontSize);
+                    const lineHeight = fontSize * 1.5; // line-height
+                    const charWidth = fontSize * 0.6; // 假设等宽字体下每个字符宽度
+                    
+                    const highlight = document.createElement('div');
+                    highlight.className = 'error-highlight';
+                    highlight.style.top = `${10 + (line - 1) * lineHeight}px`;
+                    highlight.style.left = `${50 + (column - 1) * charWidth}px`;
+                    highlight.style.width = `${charWidth}px`;
+                    highlight.style.height = `${lineHeight}px`;
+                    
+                    document.querySelector('.sql-editor-wrapper').appendChild(highlight);
+                    
+                    // 滚动到错误位置
+                    sqlInput.focus();
+                    const linePosition = (line - 1) * lineHeight;
+                    sqlInput.scrollTop = linePosition - sqlInput.clientHeight / 2;
+                    
+                    // 设置光标位置
+                    const pos = lines.slice(0, line - 1).join('\n').length + column;
+                    sqlInput.setSelectionRange(pos - 1, pos);
                 }
             }
 
             document.addEventListener('DOMContentLoaded', async () => {
+                // 添加拖动调整功能
+                const resizer = document.getElementById('dragMe');
+                const leftPanel = document.querySelector('.left-panel');
+                
+                let x = 0;
+                let leftWidth = 0;
+                
+                const mouseDownHandler = function(e) {
+                    x = e.clientX;
+                    leftWidth = leftPanel.getBoundingClientRect().width;
+                    
+                    document.addEventListener('mousemove', mouseMoveHandler);
+                    document.addEventListener('mouseup', mouseUpHandler);
+                };
+                
+                const mouseMoveHandler = function(e) {
+                    const dx = e.clientX - x;
+                    const newLeftWidth = leftWidth + dx;
+                    
+                    if (newLeftWidth > 200 && newLeftWidth < window.innerWidth - 200) {
+                        leftPanel.style.width = `${newLeftWidth}px`;
+                    }
+                };
+                
+                const mouseUpHandler = function() {
+                    document.removeEventListener('mousemove', mouseMoveHandler);
+                    document.removeEventListener('mouseup', mouseUpHandler);
+                };
+                
+                resizer.addEventListener('mousedown', mouseDownHandler);
+                // 添加SQL输入框的事件监听
+                const sqlInput = document.getElementById('sqlInput');
+                sqlInput.addEventListener('input', updateLineNumbers);
+                sqlInput.addEventListener('scroll', () => {
+                    const lineNumbers = document.querySelector('.line-numbers');
+                    lineNumbers.scrollTop = sqlInput.scrollTop;
+                });
+                
+                // 初始化行号
+                updateLineNumbers();
                 sqlflow = await SQLFlow.init({
                     container: document.getElementById('sqlflow'),
                     width: '100%',
@@ -142,9 +604,207 @@
                         minimap: true,
                     },
                 });
+                
+                const options = {
+                    layout: true,
+                    onNodeClick: handleNodeClick,
+                    onEdgeClick: handleEdgeClick,
+                    onContextMenu: handleContextMenu
+                };
+                
+                // 初始化血缘图
+                const response = await fetch('/json/lineageGraph.json');
+                const data = await response.json();
+                currentData = data;  // 保存数据供后续使用
+                sqlflow.visualizeJSON(data, options);
             });
         </script>
         <style>
+            body {
+                margin: 0;
+                padding: 0;
+                font-family: Arial, sans-serif;
+            }
+            
+            #container {
+                display: flex;
+                height: 100vh;
+            }
+            
+            #sqlInput {
+                flex: 1;
+                padding: 20px;
+                border-right: 1px solid #ccc;
+            }
+            
+            #graphOutput {
+                flex: 2;
+                padding: 20px;
+            }
+            
+            .sql-editor-container {
+                position: relative;
+                width: 100%;
+                margin-bottom: 10px;
+                height: 1300px;
+            }
+            
+            .sql-editor-container {
+                position: relative;
+                width: 100%;
+                margin-bottom: 10px;
+                height: 1300px;
+            }
+
+            .line-numbers {
+                position: absolute;
+                left: 0;
+                top: 0;
+                bottom: 0;
+                width: 40px;
+                background-color: #f5f5f5;
+                border: 1px solid #ccc;
+                border-right: none;
+                border-radius: 4px 0 0 4px;
+                font-family: monospace;
+                font-size: 14px;
+                color: #999;
+                user-select: none;
+                overflow: hidden;
+                z-index: 1;
+            }
+            
+            .line-number {
+                height: 1.5em;
+                line-height: 1.5em;
+                padding: 0;
+                text-align: center;
+                width: 100%;
+                display: block;
+                margin: 0;
+                font-family: monospace;
+            }
+
+            .error-highlight {
+                background-color: #ffebee;
+                position: absolute;
+                z-index: 1;
+                pointer-events: none;
+                border-radius: 2px;
+                box-shadow: 0 0 2px rgba(255, 0, 0, 0.3);
+            }
+            
+            .sql-editor-container {
+                position: relative;
+                width: 100%;
+                margin-bottom: 10px;
+                height: 1300px;
+                background: white;
+            }
+
+            .sql-editor-wrapper {
+                position: relative;
+                width: 100%;
+                height: 100%;
+            }
+
+            #sqlInput, #sqlHighlight {
+                width: 100%;
+                height: 1300px;
+                padding: 10px 10px 10px 50px;
+                font-family: monospace;
+                font-size: 14px;
+                line-height: 1.5;
+                border: 1px solid #ccc;
+                border-radius: 4px;
+                resize: vertical;
+                white-space: pre;
+                tab-size: 4;
+                box-sizing: border-box;
+                overflow-y: auto;
+                background: transparent;
+            }
+            
+            #sqlInput {
+                position: absolute;
+                top: 0;
+                left: 0;
+                right: 0;
+                bottom: 0;
+                z-index: 2;
+            }
+            
+            textarea {
+                width: 100%;
+                height: 1300px;
+                margin-bottom: 10px;
+                font-family: monospace;
+            }
+            
+            .context-menu {
+                position: fixed;
+                background: white;
+                border: 1px solid #ccc;
+                border-radius: 4px;
+                box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+                padding: 5px 0;
+                z-index: 1000;
+            }
+            
+            .context-menu-item {
+                padding: 8px 20px;
+                cursor: pointer;
+                white-space: nowrap;
+            }
+            
+            .context-menu-item:hover {
+                background-color: #f0f0f0;
+            }
+            
+            .column-dialog {
+                position: fixed;
+                top: 50%;
+                left: 50%;
+                transform: translate(-50%, -50%);
+                background: white;
+                border-radius: 8px;
+                box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+                padding: 20px;
+                min-width: 300px;
+                max-width: 80%;
+                max-height: 80vh;
+                overflow-y: auto;
+                z-index: 1001;
+            }
+            
+            .column-dialog h3 {
+                margin: 0 0 15px 0;
+                color: #333;
+            }
+            
+            .column-dialog ul {
+                list-style: none;
+                padding: 0;
+                margin: 0 0 15px 0;
+            }
+            
+            .column-dialog li {
+                padding: 8px 0;
+                border-bottom: 1px solid #eee;
+            }
+            
+            .column-dialog li:last-child {
+                border-bottom: none;
+            }
+            
+            .column-dialog button {
+                float: right;
+            }
+            
+            .highlighted {
+                background-color: yellow;
+            }
+
             html, body {
                 width: 100%;
                 height: 100%;
@@ -154,133 +814,98 @@
                 font-family: Arial, sans-serif;
                 overflow: hidden;
             }
-            
+
             .container {
                 display: flex;
                 height: 100vh;
                 width: 100%;
+                box-sizing: border-box;
             }
-            
+
             .left-panel {
-                width: 40%;
-                height: 100%;
+                width: 50%;
+                min-width: 300px;
                 display: flex;
                 flex-direction: column;
-                border-right: 1px solid #ccc;
-                background-color: #f8f9fa;
+                padding: 10px;
             }
-            
+
             .right-panel {
-                width: 60%;
-                height: 100%;
-                display: flex;
-                flex-direction: column;
-            }
-            
-            .controls {
-                padding: 10px;
-                background-color: #fff;
-                border-bottom: 1px solid #ccc;
-            }
-            
-            .sql-container {
                 flex: 1;
-                padding: 10px;
+                min-width: 300px;
                 display: flex;
                 flex-direction: column;
-                overflow: hidden;
+                padding: 10px;
+            }
+
+            .resizer {
+                width: 8px;
+                cursor: col-resize;
+                background-color: #f0f0f0;
                 position: relative;
             }
-            
-            #sqlInput, #sqlHighlight {
+
+            .resizer::after {
+                content: '';
+                position: absolute;
+                left: 50%;
+                top: 50%;
+                transform: translate(-50%, -50%);
+                height: 30px;
+                width: 2px;
+                background-color: #ccc;
+                border-radius: 1px;
+            }
+
+            .resizer:hover {
+                background-color: #e0e0e0;
+            }
+
+            .resizer:hover::after {
+                background-color: #999;
+            }
+
+            .graph-container {
+                flex: 1;
+                position: relative;
+                overflow: hidden;
+                border: 1px solid #ccc;
+                border-radius: 4px;
+            }
+
+            #sqlflow {
                 width: 100%;
                 height: 100%;
-                margin: 0;
-                font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', 'Consolas', monospace;
-                font-size: 14px;
-                line-height: 1.5;
-                padding: 10px 10px 10px 50px; /* 为行号留出空间 */
-                box-sizing: border-box;
-                border: 1px solid #ccc;
-                border-radius: 4px;
-                resize: none;
-                white-space: pre;
-                tab-size: 4;
-                -moz-tab-size: 4;
-                background-color: #fff;
-                overflow: auto;
+                border: none;
             }
-            
-            #sqlHighlight {
-                display: none;
-                position: absolute;
-                top: 10px;
-                left: 10px;
-                right: 10px;
-                bottom: 10px;
-                background-color: #fafafa;
+
+            .controls {
+                margin-bottom: 10px;
+                display: flex;
+                gap: 10px;
             }
-            
-            #sqlHighlight .highlight {
-                background-color: #ffeb3b;
-                padding: 2px;
-                border-radius: 2px;
-                display: inline-block;
-            }
-            
-            .line-number {
-                display: inline-block;
-                width: 40px;
-                margin-left: -40px;
-                color: #999;
-                text-align: right;
-                padding-right: 10px;
-                user-select: none;
-            }
-            
+
             select, button {
-                padding: 8px 16px;
-                margin-right: 10px;
+                padding: 8px 12px;
                 border: 1px solid #ccc;
                 border-radius: 4px;
                 font-size: 14px;
             }
-            
+
             button {
                 background-color: #4CAF50;
                 color: white;
                 border: none;
                 cursor: pointer;
             }
-            
+
             button:hover {
                 background-color: #45a049;
             }
-            
+
             button:disabled {
                 background-color: #cccccc;
                 cursor: not-allowed;
-            }
-            
-            #error {
-                color: red;
-                margin: 10px 0;
-                padding: 10px;
-                border: 1px solid red;
-                border-radius: 4px;
-                display: none;
-            }
-            
-            #sqlflow {
-                flex: 1;
-                border: none;
-                background-color: #fff;
-            }
-            
-            .graph-container {
-                flex: 1;
-                position: relative;
-                overflow: hidden;
             }
         </style>
     </head>
@@ -303,15 +928,21 @@
                         <option value="sybase">Sybase</option>
                         <option value="teradata">Teradata</option>
                     </select>
-                    <button id="analyzeBtn" onclick="analyzeSql('lineage')">Analyze Lineage</button>
-                    <button id="erBtn" onclick="analyzeSql('er')">Generate ER</button>
+                    <button id="analyzeBtn" onclick="analyzeSql('lineage')">血缘分析</button>
+                    <button id="erBtn" onclick="analyzeSql('er')">生成ER图</button>
                 </div>
                 <div class="sql-container">
-                    <textarea id="sqlInput" placeholder="Enter your SQL here..."></textarea>
+                    <div class="sql-editor-container">
+                        <div class="sql-editor-wrapper">
+                            <div class="line-numbers"></div>
+                            <textarea id="sqlInput" placeholder="Enter your SQL here..." spellcheck="false"></textarea>
+                        </div>
+                    </div>
                     <div id="sqlHighlight"></div>
                     <div id="error"></div>
                 </div>
             </div>
+            <div class="resizer" id="dragMe"></div>
             <div class="right-panel">
                 <div class="graph-container">
                     <div id="sqlflow"></div>
