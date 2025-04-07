@@ -631,10 +631,15 @@
                 height: 100vh;
             }
             
-            #sqlInput {
-                flex: 1;
-                padding: 20px;
+            .left-panel {
+                width: 40%;
+                min-width: 300px;
                 border-right: 1px solid #ccc;
+                padding: 10px;
+                display: flex;
+                flex-direction: column;
+                height: 100vh;
+                overflow: hidden;
             }
             
             #graphOutput {
@@ -642,20 +647,37 @@
                 padding: 20px;
             }
             
-            .sql-editor-container {
+            .sql-container {
                 position: relative;
-                width: 100%;
-                margin-bottom: 10px;
-                height: 1300px;
-            }
-            
-            .sql-editor-container {
-                position: relative;
-                width: 100%;
-                margin-bottom: 10px;
-                height: 1300px;
+                height: auto;
+                min-height: 950px;
+                display: flex;
+                flex-direction: column;
+                flex-shrink: 0;
             }
 
+            .sql-editor-wrapper {
+                display: flex;
+                border: 1px solid #ccc;
+                border-radius: 4px;
+                flex: 1;
+                min-height: 0;
+                overflow: hidden;
+            }
+
+            #sqlInput {
+                flex: 1;
+                padding: 8px;
+                border: none;
+                font-family: monospace;
+                font-size: 14px;
+                resize: none;
+                outline: none;
+                white-space: pre;
+                overflow-wrap: normal;
+                overflow: auto;
+            }
+            
             .line-numbers {
                 position: absolute;
                 left: 0;
@@ -698,7 +720,7 @@
                 position: relative;
                 width: 100%;
                 margin-bottom: 10px;
-                height: 1300px;
+                height: 100%;
                 background: white;
             }
 
@@ -710,35 +732,56 @@
 
             #sqlInput, #sqlHighlight {
                 width: 100%;
-                height: 1300px;
+                height: 950px;
                 padding: 10px 10px 10px 50px;
                 font-family: monospace;
                 font-size: 14px;
                 line-height: 1.5;
-                border: 1px solid #ccc;
-                border-radius: 4px;
-                resize: vertical;
-                white-space: pre;
                 tab-size: 4;
-                box-sizing: border-box;
-                overflow-y: auto;
-                background: transparent;
+                -moz-tab-size: 4;
+                flex-shrink: 0;
             }
             
-            #sqlInput {
+            #sqlHighlight {
                 position: absolute;
                 top: 0;
                 left: 0;
-                right: 0;
-                bottom: 0;
-                z-index: 2;
+                pointer-events: none;
+                white-space: pre;
+                overflow: hidden;
+                background-color: transparent;
+                z-index: 1;
             }
             
             textarea {
                 width: 100%;
-                height: 1300px;
+                height: 950px;
                 margin-bottom: 10px;
                 font-family: monospace;
+                flex-shrink: 0;
+            }
+
+            #error {
+                display: none;
+                margin: 0 0 10px 0;
+                padding: 10px 15px;
+                background-color: #ffebee;
+                color: #c62828;
+                border: 1px solid #ef9a9a;
+                border-radius: 4px;
+                font-family: Arial, sans-serif;
+                line-height: 1.5;
+                position: relative;
+                z-index: 1000;
+                max-width: 100%;
+                word-wrap: break-word;
+            }
+
+            #error .error-location {
+                cursor: pointer;
+                color: #0366d6;
+                text-decoration: underline;
+                margin-right: 5px;
             }
             
             .context-menu {
@@ -823,11 +866,13 @@
             }
 
             .left-panel {
-                width: 50%;
+                width: 40%;
                 min-width: 300px;
                 display: flex;
                 flex-direction: column;
                 padding: 10px;
+                position: relative;
+                overflow: hidden;
             }
 
             .right-panel {
@@ -880,9 +925,13 @@
             }
 
             .controls {
-                margin-bottom: 10px;
                 display: flex;
                 gap: 10px;
+                position: sticky;
+                top: 0;
+                background: white;
+                z-index: 100;
+                padding: 10px 0;
             }
 
             select, button {
@@ -939,11 +988,11 @@
                         </div>
                     </div>
                     <div id="sqlHighlight"></div>
-                    <div id="error"></div>
                 </div>
             </div>
             <div class="resizer" id="dragMe"></div>
             <div class="right-panel">
+                <div id="error" class="error-top"></div>
                 <div class="graph-container">
                     <div id="sqlflow"></div>
                 </div>
